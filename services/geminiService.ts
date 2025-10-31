@@ -99,6 +99,43 @@ export const generateSpeech = async (text: string): Promise<string> => {
     return base64Audio;
 };
 
+export const getIngredientSubstitute = async (ingredient: string): Promise<string | null> => {
+    const model = 'gemini-2.5-flash';
+    const prompt = `What is a common culinary substitute for "${ingredient}"? Provide just the substitute name or a very brief phrase. If no common substitute exists, say "None".`;
+
+    const substituteSchema = {
+        type: Type.OBJECT,
+        properties: {
+            substitute: { type: Type.STRING, description: "The suggested substitute ingredient, or 'None'." },
+        },
+        required: ['substitute'],
+    };
+
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: { parts: [{ text: prompt }] },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: substituteSchema,
+                temperature: 0.2,
+            },
+        });
+
+        const responseText = response.text.trim();
+        const parsed = JSON.parse(responseText);
+        
+        if (parsed.substitute && parsed.substitute.toLowerCase() !== 'none') {
+            return parsed.substitute;
+        }
+        return null;
+
+    } catch (e) {
+        console.error(`Error fetching substitute for ${ingredient}:`, e);
+        return null;
+    }
+};
+
 
 export const analyzeFridge = async (base64Images: string[], mealType: string, dietaryRestrictions: string[], cuisineType: string): Promise<GeminiResponse> => {
   const model = 'gemini-2.5-flash';

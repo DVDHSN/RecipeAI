@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Recipe } from '../types';
 import { useTextToSpeech } from '../hooks/useTextToSpeech';
-import { XCircleIcon, ChevronLeftIcon, ChevronRightIcon, MicIcon, StopCircleIcon, CheckCircleIcon, FlameIcon } from './Icons';
+import { XCircleIcon, ChevronLeftIcon, ChevronRightIcon, MicIcon, StopCircleIcon, CheckCircleIcon, FlameIcon, LightbulbIcon } from './Icons';
+import { getIngredientSubstitute } from '../services/geminiService';
 
 interface CookingModeViewProps {
   recipe: Recipe;
@@ -62,6 +63,8 @@ const generateSearchTerms = (ingredient: string): string[] => {
 const CookingModeView: React.FC<CookingModeViewProps> = ({ recipe, onExit }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const { isSpeaking, speak, cancel, prefetch } = useTextToSpeech();
+  const [substitutes, setSubstitutes] = useState<Record<string, string>>({});
+  const [fetchingSubstitutes, setFetchingSubstitutes] = useState<Set<string>>(new Set());
   
   const handleNext = useCallback(() => {
     if (currentStep < recipe.steps.length - 1) {
@@ -83,11 +86,9 @@ const CookingModeView: React.FC<CookingModeViewProps> = ({ recipe, onExit }) => 
   
   useEffect(() => {
     if (prefetch) {
-      // Prefetch current step's audio
       if (recipe.steps[currentStep]) {
           prefetch(recipe.steps[currentStep]);
       }
-      // Prefetch next step's audio for seamless transition
       if (currentStep + 1 < recipe.steps.length) {
           prefetch(recipe.steps[currentStep + 1]);
       }
@@ -121,6 +122,33 @@ const CookingModeView: React.FC<CookingModeViewProps> = ({ recipe, onExit }) => 
     return mentioned;
   }, [currentStep, recipe.steps, recipe.ingredients]);
 
+  useEffect(() => {
+    const missingHighlighted = [...highlightedIngredients].filter(
+        (ing) => recipe.missingIngredients.includes(ing)
+    );
+
+    missingHighlighted.forEach(async (ingredient) => {
+        if (!substitutes[ingredient] && !fetchingSubstitutes.has(ingredient)) {
+            try {
+                setFetchingSubstitutes(prev => new Set(prev).add(ingredient));
+                const substitute = await getIngredientSubstitute(ingredient);
+                if (substitute) {
+                    setSubstitutes(prev => ({...prev, [ingredient]: substitute}));
+                }
+            } catch (error) {
+                console.error(`Failed to fetch substitute for ${ingredient}`, error);
+            } finally {
+                setFetchingSubstitutes(prev => {
+                    const newSet = new Set(prev);
+                    newSet.delete(ingredient);
+                    return newSet;
+                });
+            }
+        }
+    });
+
+  }, [highlightedIngredients, recipe.missingIngredients, substitutes, fetchingSubstitutes]);
+
 
   return (
     <div className="fixed inset-0 bg-gray-900 z-50 flex flex-col md:flex-row p-4 md:p-8 gap-8">
@@ -130,8 +158,14 @@ const CookingModeView: React.FC<CookingModeViewProps> = ({ recipe, onExit }) => 
           <h3 className="text-2xl font-bold text-white mb-4">Ingredients</h3>
           <ul className="space-y-2">
             {recipe.ingredients.map(item => (
-              <li key={item} className={`transition-colors duration-300 p-2 rounded-md text-gray-300 border-l-4 ${highlightedIngredients.has(item) ? 'bg-orange-900/50 border-orange-500' : 'border-transparent'}`}>
+              <li key={item} className={`transition-all duration-300 p-2 rounded-md text-gray-300 border-l-4 ${highlightedIngredients.has(item) ? 'bg-orange-900/50 border-orange-500' : 'border-transparent'}`}>
                 {item}
+                {substitutes[item] && (
+                    <div className="mt-2 text-xs text-blue-300 flex items-start gap-1.5 p-1.5 bg-gray-700/50 rounded">
+                        <LightbulbIcon className="h-4 w-4 text-yellow-300 flex-shrink-0 mt-0.5" />
+                        <span><strong>Substitute:</strong> {substitutes[item]}</span>
+                    </div>
+                )}
               </li>
             ))}
           </ul>
