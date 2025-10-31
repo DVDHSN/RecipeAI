@@ -1,0 +1,7 @@
+{
+  "name": "RecipeAI",
+  "description": "Snap a photo of your fridge, and get instant recipe suggestions from RecipeAI with step-by-step, hands-free cooking instructions. The AI identifies ingredients, suggests dishes based on what you have, and even creates a shopping list for what's missing.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
