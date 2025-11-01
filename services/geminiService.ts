@@ -52,27 +52,135 @@ const recipeSchema = {
   required: ['recipeName', 'difficulty', 'prepTime', 'nutrition', 'ingredients', 'missingIngredients', 'steps', 'usesConfirmedIngredients']
 };
 
-const schema = {
-  type: Type.OBJECT,
-  properties: {
-    identifiedIngredients: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-       description: 'A list of all visible, edible ingredients identified in all images combined.'
-    },
-    ingredientsToConfirm: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: 'A list of up to 5 common pantry staples (e.g. "eggs", "onion", "garlic", "butter", "milk") that are not visible in the images but would significantly enhance the recipe options if available. Ask the user to confirm these.'
-    },
-    recipes: {
-      type: Type.ARRAY,
-      items: recipeSchema,
-      description: 'An array of 3 to 5 suggested recipe objects. These recipes can assume the user has the items from `ingredientsToConfirm`.'
+export const identifyIngredients = async (base64Images: string[]): Promise<{ identifiedIngredients: string[] }> => {
+    const model = 'gemini-2.5-flash';
+    const prompt = `Analyze the provided images and identify all edible food ingredients. Be as specific as possible. For example, "cheese" could be "cheddar cheese". List only the ingredients.`;
+
+    const schema = {
+        type: Type.OBJECT,
+        properties: {
+            identifiedIngredients: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'A list of all visible, edible ingredients identified in all images combined.'
+            },
+        },
+        required: ['identifiedIngredients']
+    };
+
+    const imageParts = base64Images.map(img => ({
+        inlineData: {
+            mimeType: 'image/jpeg',
+            data: img,
+        },
+    }));
+
+    const textPart = { text: prompt };
+
+    const response = await ai.models.generateContent({
+        model: model,
+        contents: { parts: [...imageParts, textPart] },
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: schema,
+        },
+    });
+
+    const responseText = response.text.trim();
+    try {
+        return JSON.parse(responseText);
+    } catch (e) {
+        console.error("Failed to parse Gemini JSON response for ingredients:", responseText);
+        throw new Error("Received an invalid format from the AI.");
     }
-  },
-  required: ['identifiedIngredients', 'ingredientsToConfirm', 'recipes']
 };
+
+export const generateRecipes = async (ingredients: string[], mealType: string, dietaryRestrictions: string[], cuisineType: string): Promise<GeminiResponse> => {
+    const model = 'gemini-2.5-flash';
+  
+    const dietaryPrompt = dietaryRestrictions.length > 0 
+      ? `Important: All suggested recipes must be suitable for the following dietary preferences: ${dietaryRestrictions.join(', ')}.`
+      : '';
+    
+    const mealTypePrompt = mealType !== 'Any' ? `The user is looking for ${mealType.toLowerCase()} recipes.` : '';
+    const cuisinePrompt = cuisineType !== 'Any' ? `The user has requested ${cuisineType} cuisine. Please tailor the recipes accordingly.` : '';
+  
+  
+    const prompt = `You are a creative culinary AI. The user has the following ingredients: ${ingredients.join(', ')}. Please perform the following tasks:
+  
+  1.  **Suggest Staples**: Identify up to 5 common pantry staples (like "eggs", "onion", "butter") that are NOT in the provided ingredient list but would greatly expand the recipe possibilities. Return these in the \`ingredientsToConfirm\` array so the user can confirm they have them.
+  2.  **Generate Recipes**: Create 3-5 diverse recipes. These recipes should primarily use the provided ingredients but can ALSO use the staples you listed in \`ingredientsToConfirm\`. **Important**: Ensure at least one suggested recipe uses *only* the provided ingredients and does not require any items from \`ingredientsToConfirm\`, serving as a baseline option.
+  3.  **Detail Each Recipe**: For each recipe, provide all the details as per the JSON schema.
+      *   **Crucially**, for each recipe, populate the \`usesConfirmedIngredients\` array with the exact items from your \`ingredientsToConfirm\` list that this specific recipe requires.
+      *   List any other non-staple ingredients that are not in the provided list under \`missingIngredients\`.
+      *   Provide estimated nutritional information (calories, protein, carbs, fat).
+  
+  ${mealTypePrompt}
+  ${cuisinePrompt}
+  ${dietaryPrompt}
+  
+  The user's provided ingredients are considered "identified". Do not populate the \`identifiedIngredients\` field in the response.
+  
+  Return your response as a single, valid JSON object adhering to the provided schema. Do not add any explanatory text outside the JSON structure.
+  `;
+  
+    const schema = {
+        type: Type.OBJECT,
+        properties: {
+          identifiedIngredients: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+             description: 'This should be an empty array. The user has provided the ingredients.'
+          },
+          ingredientsToConfirm: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'A list of up to 5 common pantry staples (e.g. "eggs", "onion", "garlic", "butter", "milk") that are not in the provided list but would significantly enhance the recipe options if available. Ask the user to confirm these.'
+          },
+          recipes: {
+            type: Type.ARRAY,
+            items: recipeSchema,
+            description: 'An array of 3 to 5 suggested recipe objects. These recipes can assume the user has the items from `ingredientsToConfirm`.'
+          }
+        },
+        required: ['ingredientsToConfirm', 'recipes']
+      };
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: { parts: [{ text: prompt }] },
+      config: {
+          responseMimeType: "application/json",
+          responseSchema: schema,
+      },
+    });
+    
+    const responseText = response.text.trim();
+    try {
+      const parsedJson = JSON.parse(responseText);
+      
+      if (!parsedJson.identifiedIngredients) {
+        parsedJson.identifiedIngredients = ingredients;
+      }
+
+      if (Array.isArray(parsedJson.recipes)) {
+          parsedJson.recipes.forEach((recipe: any) => {
+              if (recipe.calories && !recipe.nutrition) {
+                  recipe.nutrition = {
+                      calories: recipe.calories,
+                      protein: 'N/A',
+                      carbs: 'N/A',
+                      fat: 'N/A'
+                  };
+              }
+          });
+      }
+      return parsedJson;
+    } catch (e) {
+      console.error("Failed to parse Gemini JSON response:", responseText);
+      throw new Error("Received an invalid format from the AI.");
+    }
+  };
 
 export const generateSpeech = async (text: string): Promise<string> => {
     const model = "gemini-2.5-flash-preview-tts";
@@ -134,74 +242,4 @@ export const getIngredientSubstitute = async (ingredient: string): Promise<strin
         console.error(`Error fetching substitute for ${ingredient}:`, e);
         return null;
     }
-};
-
-
-export const analyzeFridge = async (base64Images: string[], mealType: string, dietaryRestrictions: string[], cuisineType: string): Promise<GeminiResponse> => {
-  const model = 'gemini-2.5-flash';
-  
-  const dietaryPrompt = dietaryRestrictions.length > 0 
-    ? `Important: All suggested recipes must be suitable for the following dietary preferences: ${dietaryRestrictions.join(', ')}.`
-    : '';
-  
-  const mealTypePrompt = mealType !== 'Any' ? `The user is looking for ${mealType.toLowerCase()} recipes.` : '';
-  const cuisinePrompt = cuisineType !== 'Any' ? `The user has requested ${cuisineType} cuisine. Please tailor the recipes accordingly.` : '';
-
-
-  const prompt = `You are a creative culinary AI. Analyze the ingredients across all provided images and perform the following tasks:
-
-1.  **Identify Ingredients**: List all edible ingredients you can see.
-2.  **Suggest Staples**: Identify up to 5 common pantry staples (like "eggs", "onion", "butter") that are NOT visible but would greatly expand the recipe possibilities. Return these in the \`ingredientsToConfirm\` array so the user can confirm they have them.
-3.  **Generate Recipes**: Create 3-5 diverse recipes. These recipes should primarily use the visible ingredients but can ALSO use the staples you listed in \`ingredientsToConfirm\`. **Important**: Ensure at least one suggested recipe uses *only* the visible ingredients and does not require any items from \`ingredientsToConfirm\`, serving as a baseline option.
-4.  **Detail Each Recipe**: For each recipe, provide all the details as per the JSON schema.
-    *   **Crucially**, for each recipe, populate the \`usesConfirmedIngredients\` array with the exact items from your \`ingredientsToConfirm\` list that this specific recipe requires.
-    *   List any other non-staple ingredients that are not visible in the photos under \`missingIngredients\`.
-    *   Provide estimated nutritional information (calories, protein, carbs, fat).
-
-${mealTypePrompt}
-${cuisinePrompt}
-${dietaryPrompt}
-
-Return your response as a single, valid JSON object adhering to the provided schema. Do not add any explanatory text outside the JSON structure.
-`;
-
-  const imageParts = base64Images.map(img => ({
-    inlineData: {
-      mimeType: 'image/jpeg',
-      data: img,
-    },
-  }));
-
-  const textPart = { text: prompt };
-
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: { parts: [...imageParts, textPart] },
-    config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-    },
-  });
-  
-  const responseText = response.text.trim();
-  try {
-    const parsedJson = JSON.parse(responseText);
-    // Ensure calories field from older schema versions is handled
-    if (Array.isArray(parsedJson.recipes)) {
-        parsedJson.recipes.forEach((recipe: any) => {
-            if (recipe.calories && !recipe.nutrition) {
-                recipe.nutrition = {
-                    calories: recipe.calories,
-                    protein: 'N/A',
-                    carbs: 'N/A',
-                    fat: 'N/A'
-                };
-            }
-        });
-    }
-    return parsedJson;
-  } catch (e) {
-    console.error("Failed to parse Gemini JSON response:", responseText);
-    throw new Error("Received an invalid format from the AI.");
-  }
 };

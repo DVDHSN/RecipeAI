@@ -1,14 +1,15 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { analyzeFridge } from './services/geminiService';
+import { identifyIngredients, generateRecipes } from './services/geminiService';
 import { Recipe, GeminiResponse, CookedRecipe } from './types';
 import Header from './components/Header';
 import UploadView from './components/UploadView';
+import IngredientCorrectionView from './components/IngredientCorrectionView';
 import ConfirmationView from './components/ConfirmationView';
 import ResultsView from './components/ResultsView';
 import CookingModeView from './components/CookingModeView';
 import { Spinner } from './components/Icons';
 
-type ViewState = 'UPLOAD' | 'LOADING' | 'CONFIRMATION' | 'RESULTS' | 'COOKING';
+type ViewState = 'UPLOAD' | 'LOADING' | 'INGREDIENT_CORRECTION' | 'CONFIRMATION' | 'RESULTS' | 'COOKING';
 
 const App: React.FC = () => {
   const [viewState, setViewState] = useState<ViewState>('UPLOAD');
@@ -19,6 +20,9 @@ const App: React.FC = () => {
   const [shoppingList, setShoppingList] = useState<Set<string>>(new Set());
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const [cookedHistory, setCookedHistory] = useState<CookedRecipe[]>([]);
+  const [identifiedIngredients, setIdentifiedIngredients] = useState<string[]>([]);
+  const [mealType, setMealType] = useState<string>('Any');
+  const [cuisineType, setCuisineType] = useState<string>('Any');
 
   useEffect(() => {
     try {
@@ -51,12 +55,46 @@ const App: React.FC = () => {
     setViewState('RESULTS');
   };
 
-  const handleAnalysis = useCallback(async (imagesBase64: string[], mealType: string, cuisineType: string) => {
+  const handleAnalysis = useCallback(async (imagesBase64: string[], meal: string, cuisine: string) => {
     setViewState('LOADING');
     setError(null);
     setStagedAnalysisResult(null);
+    setIdentifiedIngredients([]);
+    setMealType(meal);
+    setCuisineType(cuisine);
+
     try {
-      const result = await analyzeFridge(imagesBase64, mealType, activeFilters, cuisineType);
+      const result = await identifyIngredients(imagesBase64);
+      if (result && result.identifiedIngredients.length > 0) {
+        setIdentifiedIngredients(result.identifiedIngredients);
+        setViewState('INGREDIENT_CORRECTION');
+      } else {
+        setError("Couldn't identify ingredients from the photo. You can add them manually.");
+        setIdentifiedIngredients([]);
+        setViewState('INGREDIENT_CORRECTION');
+      }
+    } catch (err) {
+      console.error(err);
+      setError('An error occurred while analyzing the image. Please try again.');
+      setViewState('UPLOAD');
+    }
+  }, []);
+
+  const handleGenerateRecipes = useCallback(async (correctedIngredients: string[]) => {
+    setViewState('LOADING');
+    setError(null);
+    setStagedAnalysisResult(null);
+
+    if (correctedIngredients.length === 0) {
+        setError("Please add some ingredients to find recipes.");
+        setIdentifiedIngredients([]);
+        setViewState('INGREDIENT_CORRECTION');
+        return;
+    }
+
+    try {
+      const result = await generateRecipes(correctedIngredients, mealType, activeFilters, cuisineType);
+      
       if (result && result.recipes && result.recipes.length > 0) {
         if (result.ingredientsToConfirm && result.ingredientsToConfirm.length > 0) {
           setStagedAnalysisResult(result);
@@ -65,15 +103,17 @@ const App: React.FC = () => {
           processAnalysisResults(result.recipes);
         }
       } else {
-        setError("Couldn't find any recipes for the ingredients shown. Please try a different photo or adjust your filters.");
-        setViewState('UPLOAD');
+        setError("Couldn't find any recipes for the ingredients provided. Please try with different ingredients.");
+        setIdentifiedIngredients(correctedIngredients);
+        setViewState('INGREDIENT_CORRECTION');
       }
     } catch (err) {
       console.error(err);
-      setError('An error occurred while analyzing the image. Please try again.');
-      setViewState('UPLOAD');
+      setError('An error occurred while generating recipes. Please try again.');
+      setIdentifiedIngredients(correctedIngredients);
+      setViewState('INGREDIENT_CORRECTION');
     }
-  }, [activeFilters]);
+}, [mealType, cuisineType, activeFilters]);
 
   const handleConfirmation = useCallback((confirmedStaples: string[]) => {
     if (!stagedAnalysisResult) return;
@@ -161,6 +201,9 @@ const App: React.FC = () => {
     setShoppingList(new Set());
     setActiveFilters([]);
     setStagedAnalysisResult(null);
+    setIdentifiedIngredients([]);
+    setMealType('Any');
+    setCuisineType('Any');
   }, []);
 
   return (
@@ -174,6 +217,14 @@ const App: React.FC = () => {
             <h2 className="text-2xl font-semibold mt-4 text-orange-400">Chef is thinking...</h2>
             <p className="text-gray-400 mt-2">Analyzing your ingredients and finding delicious recipes!</p>
           </div>
+        )}
+        {viewState === 'INGREDIENT_CORRECTION' && (
+          <IngredientCorrectionView
+            initialIngredients={identifiedIngredients}
+            onConfirm={handleGenerateRecipes}
+            onBack={resetApp}
+            error={error}
+          />
         )}
         {viewState === 'CONFIRMATION' && stagedAnalysisResult && stagedAnalysisResult.ingredientsToConfirm && (
           <ConfirmationView

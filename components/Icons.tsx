@@ -155,3 +155,10 @@ export const LightbulbIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =>
     <path d="M12 5C8.68629 5 6 7.68629 6 11C6 13.1446 7.03926 15.0118 8.55556 16.1111L8.55556 17H15.4444L15.4444 16.1111C16.9607 15.0118 18 13.1446 18 11C18 7.68629 15.3137 5 12 5Z" />
   </svg>
 );
+
+export const PlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
